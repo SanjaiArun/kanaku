@@ -74,11 +74,9 @@ services:
       DB_NAME: kanakku
       DB_USER: kanakku_admin
       DB_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
-      FIREFLY_URL: http://firefly_iii:8080
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       GROQ_API_KEY: ${GROQ_API_KEY}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
-      POLL_INTERVAL_SECONDS: "30"
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
 
 volumes:
   pgdata:

@@ -2,29 +2,45 @@
 
 *"Kanakku" (கணக்கு) — Tamil for "account" / "the calculation."*
 
-A multi-user personal finance assistant. Send an expense, income, or transfer
-as a Telegram message in English, Tamil, or Hindi; Groq parses it; it lands
-in your own self-hosted Firefly III ledger.
+A multi-user personal finance assistant. Talk to it on Telegram in English,
+Tamil, or Hindi — describe an expense, income, or transfer, ask about your
+balances, or ask it to fix a past entry. A LangGraph agent decides what to
+do: it asks for anything it's missing, and always shows a plain-language
+summary and asks you to confirm before it changes anything in your ledger.
 
 ## Architecture
 
 ```
-   Telegram message ───▶ kanakku_gateway (polls getUpdates every 30s)
-                                │
-                                ├──▶ Groq API (parse natural language → JSON)
-                                │
-                                ├──▶ Firefly III (post transaction)
-                                │
-                                └──▶ Telegram (send receipt or ask clarification)
+   Telegram message ──▶ kanakku_gateway (polls getUpdates)
+                              │
+                              ▼
+                     LangGraph agent (Groq LLM + tools)
+                              │
+              ┌───────────────┼────────────────────┐
+              ▼               ▼                    ▼
+      read-only tools   confirm with user    Firefly III (post/edit/
+   (balances, recent,   before any mutating   delete transactions,
+    search, budgets)         tool runs         create accounts)
 ```
 
 Services (all in `docker-compose.yml`):
 
 | Service | Role |
 |---|---|
-| `postgres` | Two logical DBs: `firefly` (ledger) and `kanakku` (queue, profiles, conversation state) |
+| `postgres` | Two logical DBs: `firefly` (ledger) and `kanakku` (profiles + the agent's conversation memory) |
 | `firefly_iii` + `firefly_cron` | Self-hosted finance ledger, multi-user |
-| `kanakku_gateway` | Polls Telegram, parses with Groq, posts to Firefly, handles conversations |
+| `kanakku_gateway` | Polls Telegram, runs the LangGraph agent, talks to Firefly |
+
+The gateway has no fixed conversation script. The agent (built with
+LangChain + LangGraph) reads the whole conversation, calls read-only tools
+freely to look things up, and asks a clarifying question whenever it
+doesn't have what it needs (e.g. an amount, or which account was used).
+Before any tool that changes the ledger — logging a transaction, creating
+an account, editing or deleting a transaction — actually runs, the graph
+pauses (via LangGraph's `interrupt`), shows you a summary of exactly what
+it's about to do, and waits for you to confirm or redirect it. This state
+is checkpointed in Postgres per Telegram user, so it survives gateway
+restarts.
 
 ## What it understands
 
@@ -34,19 +50,15 @@ Natural language in English, Tamil, or Hindi:
 spent 500 on food using SBI
 got salary 50000 in HDFC
 transferred 1000 from SBI to HDFC
+what's my balance?
+show my recent transactions
+switch to my business profile
 ```
 
-If something is missing or unclear, the bot asks — and never acts on a guess.
+If something is missing or unclear, the bot asks — and it always confirms
+before posting, editing, or deleting anything.
 
-## Commands
-
-| Command | What it does |
-|---|---|
-| `/accounts` | List all your Firefly accounts with balances |
-| `/categories` | List all categories |
-| `/newaccount SBI savings account` | Create an account (detects type from description) |
-| `/switch business` | Switch active profile |
-| `/help` | Show all commands |
+`/start` and `/help` show a quick intro; everything else is just conversation.
 
 ## Multi-user design
 
@@ -61,7 +73,7 @@ docker compose exec postgres psql -U kanakku_admin -d kanakku -c \
    VALUES (<telegram_id>, 'personal', '<pat>', 'http://firefly_iii:8080', TRUE);"
 ```
 
-**Switching profiles:** use `/switch <profile_name>` in Telegram.
+**Switching profiles:** just tell the bot, e.g. "switch to business".
 
 ## Setup
 
@@ -114,9 +126,12 @@ Send a message to your bot and watch it work.
 
 | Failure | What Kanakku does |
 |---|---|
-| **Groq unreachable** | Bot replies asking to try again; message not lost |
-| **Firefly III unreachable** | Bot replies asking to try again |
-| **LLM returns ambiguous result** | Bot asks clarifying question, waits for reply |
-| **Account not found** | Bot asks for account type, creates it, retries |
-| **Duplicate Telegram update** | `telegram_update_id` is `UNIQUE` — duplicate ignored |
+| **Groq unreachable** | Bot replies asking to try again; nothing is posted |
+| **Firefly III unreachable** | The failing tool call is reported back to the agent, which tells the user and lets them retry |
+| **Message unclear or missing details** | Agent asks a specific clarifying question and waits for the reply |
+| **Account not found** | Agent asks what type it is, creates it (with your confirmation), then continues |
 | **DB restarting** | Healthchecks ensure gateway waits for Postgres before starting |
+
+Every mutating action — logging, editing, or deleting a transaction, or
+creating an account — is confirmed with the user before it happens, so a
+misunderstood message never silently changes the ledger.
