@@ -48,7 +48,8 @@ How to behave:
   a shop/merchant, or an income source) and create it with create_account
   before logging the transaction. If it's AMBIGUOUS, confirm the closest
   match with the user before proceeding.
-- Call at most one tool per reply — never batch multiple tool calls.
+- Call at most one tool per reply — never batch multiple tool calls in the
+  same turn, even if you think you know what the next one will be.
 - Every tool that changes the ledger (create_transaction, create_account,
   update_transaction, delete_transaction) already pauses for the user's
   explicit confirmation before it runs, so just call it once you have
@@ -56,6 +57,11 @@ How to behave:
   first, the tool will.
 - If the user declines or asks to change something, adjust and try again;
   never insist.
+- Never answer a question about real data (transactions, balances,
+  accounts, categories, budgets, summaries, search results) from memory
+  or by guessing. Always call the matching tool first and base your reply
+  only on what it returns. If a tool call fails or you're unsure, say so
+  instead of making something up.
 - Keep replies short and concrete. Use ₹ for amounts.
 - Today's date is used automatically when a transaction's date is omitted.
 """
@@ -108,7 +114,10 @@ def _is_confirmation(reply: str) -> bool:
 
 def build_graph(checkpointer):
     model = ChatGroq(model=GROQ_MODEL, temperature=0)
-    model_with_tools = model.bind_tools(ALL_TOOLS)
+    # Best-effort: ask the model not to batch tool calls. Not every Groq
+    # model honors this, which is why route_after_agent/human_review_node
+    # below defend against batching regardless.
+    model_with_tools = model.bind_tools(ALL_TOOLS, parallel_tool_calls=False)
 
     def agent_node(state: AgentState):
         messages = state["messages"][-MAX_HISTORY_MESSAGES:]
@@ -121,13 +130,41 @@ def build_graph(checkpointer):
         tool_calls = getattr(last, "tool_calls", None)
         if not tool_calls:
             return END
-        if any(tc["name"] in SENSITIVE_TOOLS for tc in tool_calls):
+        # Route through human_review whenever there's more than one call
+        # (even if none look sensitive) or any single one is sensitive —
+        # never let ToolNode execute a batch that might contain a
+        # mutating call we never showed the user.
+        if len(tool_calls) > 1 or any(tc["name"] in SENSITIVE_TOOLS for tc in tool_calls):
             return "human_review"
         return "tools"
 
     def human_review_node(state: AgentState) -> Command[Literal["tools", "agent"]]:
         last: AIMessage = state["messages"][-1]
-        tool_call = last.tool_calls[0]
+        tool_calls = last.tool_calls
+
+        if len(tool_calls) > 1:
+            # The model batched multiple tool calls in one turn despite
+            # being told not to. Refuse the whole batch — every tool_call
+            # in this AIMessage needs a matching ToolMessage before the
+            # next model call, or the Groq API will reject the request.
+            rejections = [
+                ToolMessage(
+                    content=(
+                        "Rejected: you must call exactly one tool per turn. "
+                        "Call this one again by itself once it's actually needed."
+                    ),
+                    tool_call_id=tc["id"],
+                )
+                for tc in tool_calls
+            ]
+            return Command(goto="agent", update={"messages": rejections})
+
+        tool_call = tool_calls[0]
+        if tool_call["name"] not in SENSITIVE_TOOLS:
+            # A lone non-sensitive call only reaches here if it happened
+            # to be routed alongside a since-rejected batch; just run it.
+            return Command(goto="tools")
+
         reply = interrupt({"question": _describe_action(tool_call)})
         if _is_confirmation(reply):
             return Command(goto="tools")
