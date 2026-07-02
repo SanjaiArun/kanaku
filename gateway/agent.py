@@ -14,6 +14,7 @@ from typing import Annotated, Literal
 
 from typing_extensions import TypedDict
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -35,6 +36,16 @@ GROQ_MODEL_FALLBACKS = [
         "llama-3.3-70b-versatile,openai/gpt-oss-20b,meta-llama/llama-4-scout-17b-16e-instruct",
     ).split(",") if m.strip()
 ]
+
+# Gemini is a separate provider with its own quota pool, so it's the last
+# resort once every Groq model's daily quota is exhausted — only used if
+# GOOGLE_API_KEY is set. Verified working with our tool schema before
+# being wired in here (real tool call against gemini-2.5-flash-lite).
+GEMINI_MODEL_FALLBACKS = [
+    m.strip() for m in os.environ.get(
+        "GEMINI_MODEL_FALLBACKS", "gemini-2.5-flash-lite,gemini-2.5-flash",
+    ).split(",") if m.strip()
+] if os.environ.get("GOOGLE_API_KEY") else []
 
 # Cap how many past messages are replayed to the model each turn, so a
 # long-running conversation doesn't grow the prompt (and the bill)
@@ -143,18 +154,25 @@ def _validate_tool_call(tool_call: dict) -> str | None:
 
 
 def _build_model_chain():
-    # Dedup while preserving order: primary first, then each fallback
-    # that isn't already in the list.
-    model_names = [GROQ_MODEL] + [m for m in GROQ_MODEL_FALLBACKS if m != GROQ_MODEL]
+    # Dedup while preserving order: primary first, then each Groq
+    # fallback, then Gemini (a separate provider/quota pool) as the last
+    # resort if GOOGLE_API_KEY is configured.
+    groq_names = [GROQ_MODEL] + [m for m in GROQ_MODEL_FALLBACKS if m != GROQ_MODEL]
     bound = [
         ChatGroq(model=name, temperature=0).bind_tools(ALL_TOOLS, parallel_tool_calls=False)
-        for name in model_names
+        for name in groq_names
+    ]
+    bound += [
+        ChatGoogleGenerativeAI(model=name, temperature=0).bind_tools(ALL_TOOLS)
+        for name in GEMINI_MODEL_FALLBACKS
     ]
     if len(bound) == 1:
         return bound[0]
-    # Best-effort: ask the model not to batch tool calls. Not every Groq
-    # model honors this, which is why route_after_agent/human_review_node
-    # below defend against batching regardless.
+    # Best-effort: ask Groq models not to batch tool calls. Not every
+    # model honors this (Gemini doesn't take this param at all, which is
+    # why it's a Groq-only kwarg above), which is why
+    # route_after_agent/human_review_node below defend against batching
+    # regardless of which model in the chain answered.
     return bound[0].with_fallbacks(bound[1:])
 
 

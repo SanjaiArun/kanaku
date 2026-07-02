@@ -76,7 +76,8 @@ services:
       DB_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       GROQ_API_KEY: ${GROQ_API_KEY}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
 
 volumes:
   pgdata:
