@@ -1,0 +1,85 @@
+# ============================================================
+# KANAKKU — multi-user personal finance assistant
+# Telegram -> kanakku_gateway (poll + Groq parse) -> Firefly III
+# ============================================================
+
+services:
+
+  # ---------- Shared Postgres (2 logical DBs: firefly, kanakku) ----------
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kanakku_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/1-init-multi-db.sh:/docker-entrypoint-initdb.d/1-init-multi-db.sh
+      - ./db/2-init.sql:/docker-entrypoint-initdb.d/2-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kanakku_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Firefly III (finance ledger, multi-user) ----------
+  firefly_iii:
+    image: fireflyiii/core:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_KEY: ${FIREFLY_APP_KEY}
+      APP_URL: http://localhost:8080
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: firefly
+      DB_USERNAME: kanakku_admin
+      DB_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      TRUSTED_PROXIES: "**"
+    ports:
+      - "8080:8080"
+    volumes:
+      - firefly_upload:/var/www/html/storage/upload
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  firefly_cron:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on:
+      - firefly_iii
+    command: >
+      sh -c "while true; do
+        wget -qO- http://firefly_iii:8080/api/v1/cron/${FIREFLY_STATIC_CRON_TOKEN} > /dev/null 2>&1;
+        sleep 3600;
+      done"
+
+  # ---------- Gateway: Telegram polling + Groq parsing + Firefly posting ----------
+  kanakku_gateway:
+    build: ./gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_NAME: kanakku
+      DB_USER: kanakku_admin
+      DB_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      FIREFLY_URL: http://firefly_iii:8080
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      POLL_INTERVAL_SECONDS: "30"
+
+volumes:
+  pgdata:
+  firefly_upload:
