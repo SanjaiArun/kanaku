@@ -112,6 +112,24 @@ def _is_confirmation(reply: str) -> bool:
     )
 
 
+def _validate_tool_call(tool_call: dict) -> str | None:
+    """Returns an error message if a sensitive tool call's args are
+    obviously bad, so it never reaches the user as a confirmation prompt
+    at all. Returns None if the call looks fine."""
+    if tool_call["name"] == "create_transaction":
+        amount = tool_call["args"].get("amount")
+        try:
+            if amount is None or float(amount) <= 0:
+                return (
+                    "Rejected: amount must be a positive number greater than zero "
+                    f"(got {amount!r}). Ask the user for the correct amount — do not "
+                    "guess a sign or transaction type to make a bad amount work."
+                )
+        except (TypeError, ValueError):
+            return f"Rejected: amount {amount!r} is not a valid number. Ask the user for the correct amount."
+    return None
+
+
 def build_graph(checkpointer):
     model = ChatGroq(model=GROQ_MODEL, temperature=0)
     # Best-effort: ask the model not to batch tool calls. Not every Groq
@@ -165,13 +183,28 @@ def build_graph(checkpointer):
             # to be routed alongside a since-rejected batch; just run it.
             return Command(goto="tools")
 
+        validation_error = _validate_tool_call(tool_call)
+        if validation_error:
+            # Bad args (e.g. a non-positive amount) never even reach the
+            # user as a confirmation prompt — bounce straight back to the
+            # agent to ask a real question instead of confirming garbage.
+            return Command(goto="agent", update={"messages": [
+                ToolMessage(content=validation_error, tool_call_id=tool_call["id"])
+            ]})
+
         reply = interrupt({"question": _describe_action(tool_call)})
         if _is_confirmation(reply):
             return Command(goto="tools")
         tool_message = ToolMessage(
             content=(
-                f"The user did not confirm this action. They said: '{reply}'. "
-                "Do not perform the action; work out what they want instead."
+                f"The user did not reply 'yes' to confirm. They said: '{reply}'. "
+                "This could mean two different things — figure out which from "
+                "context: (1) they want to change a detail of the pending action "
+                "(amount, account, category, etc.) — adjust and re-propose it, or "
+                "(2) what they said is a completely new, unrelated request that "
+                "has nothing to do with the pending action — if so, drop the "
+                "pending action without asking about it again and just handle "
+                "the new request normally."
             ),
             tool_call_id=tool_call["id"],
         )

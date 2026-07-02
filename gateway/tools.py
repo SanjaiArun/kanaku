@@ -113,6 +113,8 @@ def create_transaction(config: RunnableConfig, type: str, amount: float,
     Resolve source/destination with resolve_account first so the names
     match existing accounts exactly. amount must be a positive number.
     date defaults to today if omitted (format YYYY-MM-DD)."""
+    if amount is None or amount <= 0:
+        return f"Rejected: amount must be a positive number greater than zero (got {amount!r})."
     profile = _profile(config)
     import datetime as _dt
     txn = {
