@@ -24,6 +24,18 @@ from tools import ALL_TOOLS, SENSITIVE_TOOLS
 
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 
+# Each Groq model has its own separate daily token quota. When the
+# primary model's quota (or per-minute rate limit) is exhausted, Groq
+# returns a 429 — fall through to the next model in this list rather
+# than failing the turn. Order matters: put stronger tool-callers first
+# so quality only degrades once quota actually forces a fallback.
+GROQ_MODEL_FALLBACKS = [
+    m.strip() for m in os.environ.get(
+        "GROQ_MODEL_FALLBACKS",
+        "llama-3.3-70b-versatile,openai/gpt-oss-20b,meta-llama/llama-4-scout-17b-16e-instruct",
+    ).split(",") if m.strip()
+]
+
 # Cap how many past messages are replayed to the model each turn, so a
 # long-running conversation doesn't grow the prompt (and the bill)
 # without bound.
@@ -130,12 +142,24 @@ def _validate_tool_call(tool_call: dict) -> str | None:
     return None
 
 
-def build_graph(checkpointer):
-    model = ChatGroq(model=GROQ_MODEL, temperature=0)
+def _build_model_chain():
+    # Dedup while preserving order: primary first, then each fallback
+    # that isn't already in the list.
+    model_names = [GROQ_MODEL] + [m for m in GROQ_MODEL_FALLBACKS if m != GROQ_MODEL]
+    bound = [
+        ChatGroq(model=name, temperature=0).bind_tools(ALL_TOOLS, parallel_tool_calls=False)
+        for name in model_names
+    ]
+    if len(bound) == 1:
+        return bound[0]
     # Best-effort: ask the model not to batch tool calls. Not every Groq
     # model honors this, which is why route_after_agent/human_review_node
     # below defend against batching regardless.
-    model_with_tools = model.bind_tools(ALL_TOOLS, parallel_tool_calls=False)
+    return bound[0].with_fallbacks(bound[1:])
+
+
+def build_graph(checkpointer):
+    model_with_tools = _build_model_chain()
 
     def agent_node(state: AgentState):
         messages = state["messages"][-MAX_HISTORY_MESSAGES:]
