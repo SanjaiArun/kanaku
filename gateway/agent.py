@@ -43,7 +43,10 @@ GROQ_MODEL_FALLBACKS = [
 # being wired in here (real tool call against gemini-2.5-flash-lite).
 GEMINI_MODEL_FALLBACKS = [
     m.strip() for m in os.environ.get(
-        "GEMINI_MODEL_FALLBACKS", "gemini-2.5-flash-lite,gemini-2.5-flash",
+        # flash-lite's free tier is capped at just 20 requests/day, far
+        # too low to be a useful fallback on its own — flash first, with
+        # flash-lite as a last-ditch extra behind it.
+        "GEMINI_MODEL_FALLBACKS", "gemini-2.5-flash,gemini-2.5-flash-lite",
     ).split(",") if m.strip()
 ] if os.environ.get("GOOGLE_API_KEY") else []
 
@@ -62,9 +65,12 @@ transaction, create an account, edit or delete a transaction, switch the
 active profile).
 
 How to behave:
-- Have a real conversation. If a message is missing something you need
-  (e.g. the amount, or which account/payment method was used), ask a
-  single, specific question instead of guessing.
+- Have a real conversation. If a message is missing something you REQUIRE
+  (the amount, or which account/payment method was used), ask a single,
+  specific question instead of guessing. Do NOT ask about category or
+  description before calling create_transaction — those are optional on
+  that tool; call it as soon as you have amount, type, and the account,
+  and just omit category/description if the user didn't mention them.
 - Before logging a transaction, use resolve_account to check whether the
   account name the user gave you already exists. If it's NOT_FOUND, ask
   what type of account it is (savings account, credit card, wallet/cash,
@@ -176,8 +182,12 @@ def _build_model_chain():
     return bound[0].with_fallbacks(bound[1:])
 
 
-def build_graph(checkpointer):
-    model_with_tools = _build_model_chain()
+def build_graph(checkpointer, model_with_tools=None):
+    # model_with_tools is an injection seam for testing a single model in
+    # isolation (see gateway/_model_bakeoff.py) — production always uses
+    # the default fallback chain.
+    if model_with_tools is None:
+        model_with_tools = _build_model_chain()
 
     def agent_node(state: AgentState):
         messages = state["messages"][-MAX_HISTORY_MESSAGES:]

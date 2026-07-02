@@ -6,7 +6,7 @@ automatically by LangChain/LangGraph — it never appears in the schema
 the LLM sees). Tools in SENSITIVE_TOOLS mutate the ledger; agent.py
 routes calls to them through a human-confirmation step before they run.
 """
-from typing import Optional
+from typing import Optional, Union
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -98,7 +98,7 @@ def create_account(config: RunnableConfig, name: str, firefly_type: str,
 
 
 @tool
-def create_transaction(config: RunnableConfig, type: str, amount: float,
+def create_transaction(config: RunnableConfig, type: str, amount: Union[float, str],
                         source: Optional[str] = None, destination: Optional[str] = None,
                         category: Optional[str] = None, description: Optional[str] = None,
                         date: Optional[str] = None) -> str:
@@ -112,15 +112,29 @@ def create_transaction(config: RunnableConfig, type: str, amount: float,
     - transfer: both source and destination are required asset accounts.
     Resolve source/destination with resolve_account first so the names
     match existing accounts exactly. amount must be a positive number.
-    date defaults to today if omitted (format YYYY-MM-DD)."""
-    if amount is None or amount <= 0:
+    date defaults to today if omitted (format YYYY-MM-DD).
+    category and description are OPTIONAL — never wait for the user to
+    supply them before calling this tool; call it as soon as you have
+    the required fields, and pass category/description as null/omitted
+    if the user didn't mention them."""
+    # amount accepts str too: some models (e.g. llama-4-scout via Groq)
+    # emit "300" instead of 300, and Groq's server-side strict schema
+    # validation rejects the tool call outright — before we ever see it —
+    # if the schema only declares "number". Accepting both types keeps
+    # the call valid regardless of which representation a given model
+    # picks; we still enforce it's actually numeric and positive here.
+    try:
+        amount_val = float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        return f"Rejected: amount {amount!r} is not a valid number."
+    if amount_val is None or amount_val <= 0:
         return f"Rejected: amount must be a positive number greater than zero (got {amount!r})."
     profile = _profile(config)
     import datetime as _dt
     txn = {
         "type": type,
         "date": date or _dt.date.today().isoformat(),
-        "amount": str(amount),
+        "amount": str(amount_val),
         "description": description or category or type.capitalize(),
     }
     if source:
