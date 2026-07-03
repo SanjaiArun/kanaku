@@ -62,16 +62,19 @@ before posting, editing, or deleting anything.
 
 ## Multi-user design
 
-Each Telegram user maps to one or more **profiles**, each with its own
-Firefly III Personal Access Token (PAT). Exactly one profile is active at a
-time — all messages post to the active profile.
+Each Telegram user gets up to two **profiles** — `personal` and
+`business` — each a fully separate, isolated Firefly III account with
+its own Personal Access Token. Exactly one profile is active at a time;
+all messages post to the active one.
 
-**Registering a profile:**
-```bash
-docker compose exec postgres psql -U kanakku_admin -d kanakku -c \
-  "INSERT INTO user_profiles (telegram_user_id, profile_name, firefly_pat, firefly_base_url, is_active)
-   VALUES (<telegram_id>, 'personal', '<pat>', 'http://firefly_iii:8080', TRUE);"
-```
+**No registration step.** The first time a new Telegram user messages
+the bot, their `personal` profile is created automatically — a real,
+dedicated Firefly III user account is provisioned behind the scenes
+(see `gateway/firefly_admin.py`). Nothing for you or them to do.
+
+**Adding a business profile:** just tell the bot, e.g. "set up a
+business profile" — also instant, no confirmation needed since it
+doesn't touch money. Each user can have at most one of each.
 
 **Switching profiles:** just tell the bot, e.g. "switch to business".
 
@@ -105,14 +108,13 @@ docker compose logs -f postgres   # confirm DBs created
 3. Go to [http://localhost:8080/profile/oauth](http://localhost:8080/profile/oauth)
 4. Create a **Personal Access Token** — copy it immediately
 
-### Step 4 — Register your Telegram profile
-```bash
-docker compose exec postgres psql -U kanakku_admin -d kanakku -c \
-  "INSERT INTO user_profiles (telegram_user_id, profile_name, firefly_pat, firefly_base_url, is_active)
-   VALUES (<your_telegram_id>, 'personal', '<your_pat>', 'http://firefly_iii:8080', TRUE);"
-```
+### Step 4 — One-time admin setup
 
-Get your Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
+The account you just registered in Step 3 is automatically the Firefly
+owner/admin. Use the same PAT from Step 3 (or generate another one the
+same way) and put it in `.env` as `FIREFLY_ADMIN_PAT` — the gateway
+uses it to auto-provision a real, isolated Firefly account for every
+new Telegram user, with no manual step per person.
 
 ### Step 5 — Start the gateway
 ```bash
@@ -120,7 +122,8 @@ docker compose up -d --build kanakku_gateway
 docker compose logs -f kanakku_gateway
 ```
 
-Send a message to your bot and watch it work.
+Message your bot — your `personal` profile is created automatically on
+first contact.
 
 ## Fallback handling
 

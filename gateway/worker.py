@@ -18,6 +18,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 
 import db
+import firefly_admin
 from agent import build_graph
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -88,11 +89,22 @@ def handle_message(update, graph):
 
     profile = db.get_active_profile(telegram_user_id)
     if not profile:
-        tg_send(chat_id,
-                "You're not registered yet.\n"
-                f"Your Telegram ID: {telegram_user_id}\n"
-                "Ask the admin to add your profile.")
-        return
+        if db.get_all_profiles(telegram_user_id):
+            # Has profile(s), just none active — shouldn't happen given
+            # create_profile_row/switch_profile always leave exactly one
+            # active, but fail loudly rather than silently re-provisioning
+            # a duplicate account if it ever does.
+            log.error("User %s has profiles but none active", telegram_user_id)
+            tg_send(chat_id, "Something's off with your account — please contact the admin.")
+            return
+        try:
+            account = firefly_admin.provision_firefly_account(telegram_user_id, "personal")
+            db.create_profile_row(telegram_user_id, "personal", account["firefly_pat"], account["firefly_base_url"])
+        except Exception as e:
+            log.error("Auto-provisioning failed for user %s: %s", telegram_user_id, e)
+            tg_send(chat_id, "Couldn't set up your account just now — please try again in a moment.")
+            return
+        profile = db.get_active_profile(telegram_user_id)
 
     config = {
         "configurable": {

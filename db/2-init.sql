@@ -1,14 +1,15 @@
 \c kanakku
 
--- A Telegram user can own MULTIPLE profiles: personal, business, a specific
--- bank, a joint account with a partner — each backed by its own Firefly PAT
--- (optionally even a different Firefly III instance via firefly_base_url).
--- Exactly one profile per telegram_user_id is "active" at a time; that's
--- the one new messages get posted to unless the user switches.
+-- A Telegram user can own at most TWO profiles: 'personal' and
+-- 'business' — each backed by its own Firefly PAT (a separate,
+-- automatically-provisioned Firefly III user; see
+-- gateway/firefly_admin.py). Exactly one profile per telegram_user_id
+-- is "active" at a time; that's the one new messages get posted to
+-- unless the user switches.
 CREATE TABLE user_profiles (
     id                 SERIAL PRIMARY KEY,
     telegram_user_id   BIGINT NOT NULL,
-    profile_name       TEXT NOT NULL,                 -- 'personal', 'business', 'hdfc-savings'...
+    profile_name       TEXT NOT NULL CHECK (profile_name IN ('personal', 'business')),
     display_name       TEXT,
     firefly_pat        TEXT NOT NULL,
     firefly_base_url   TEXT NOT NULL DEFAULT 'http://firefly_iii:8080',

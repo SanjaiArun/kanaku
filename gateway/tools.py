@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 
 import db
 import firefly
+import firefly_admin
 
 SENSITIVE_TOOLS = {"create_transaction", "update_transaction", "delete_transaction", "create_account"}
 
@@ -253,6 +254,30 @@ def switch_profile(config: RunnableConfig, profile_name: str) -> str:
     return f"Profile '{profile_name.strip()}' not found. Use list_profiles to see available profiles."
 
 
+@tool
+def create_profile(config: RunnableConfig, profile_name: str) -> str:
+    """Create the user's second profile — a separate, fully isolated
+    ledger. Each user can have at most two profiles total: one
+    'personal' and one 'business' (their first profile, called
+    'personal', already exists by the time you can talk to them, so in
+    practice this is only for adding 'business'). profile_name must be
+    exactly 'personal' or 'business'. This does not touch any money, so
+    it doesn't need confirmation — just call it when the user asks for
+    a second profile. Fails clearly if that profile already exists or
+    they already have both."""
+    telegram_user_id = _telegram_user_id(config)
+    name = profile_name.strip().lower()
+    if name not in ("personal", "business"):
+        return "profile_name must be exactly 'personal' or 'business'."
+    if db.profile_exists(telegram_user_id, name):
+        return f"You already have a '{name}' profile."
+    if db.count_profiles(telegram_user_id) >= 2:
+        return "You already have both a 'personal' and a 'business' profile — that's the maximum."
+    account = firefly_admin.provision_firefly_account(telegram_user_id, name)
+    db.create_profile_row(telegram_user_id, name, account["firefly_pat"], account["firefly_base_url"])
+    return f"Created and switched to your new '{name}' profile."
+
+
 ALL_TOOLS = [
     list_accounts,
     list_categories,
@@ -267,4 +292,5 @@ ALL_TOOLS = [
     delete_transaction,
     list_profiles,
     switch_profile,
+    create_profile,
 ]
