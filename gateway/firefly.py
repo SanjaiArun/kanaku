@@ -13,14 +13,23 @@ def _headers(profile):
     }
 
 
+def _request(method, path, profile, **kwargs):
+    """Shared request plumbing: builds the full URL, injects the profile's
+    auth headers, and raises on HTTP errors. Returns the parsed JSON body
+    unmodified — callers keep doing their own `.json()["data"]` /
+    `.get("data", [])` extraction so response-shape handling stays exactly
+    as it was per endpoint."""
+    r = requests.request(method, f"{profile['firefly_base_url']}{path}",
+                          headers=_headers(profile), **kwargs)
+    r.raise_for_status()
+    return r.json()
+
+
 def get_accounts(profile, account_type=None):
     params = {"limit": 200}
     if account_type:
         params["type"] = account_type
-    r = requests.get(f"{profile['firefly_base_url']}/api/v1/accounts",
-                      headers=_headers(profile), params=params, timeout=10)
-    r.raise_for_status()
-    return r.json().get("data", [])
+    return _request("GET", "/api/v1/accounts", profile, params=params, timeout=10).get("data", [])
 
 
 def get_account_names(profile, account_type=None):
@@ -36,68 +45,44 @@ def create_account(profile, name, account_type, account_role=None):
     }
     if account_role:
         payload["account_role"] = account_role
-    r = requests.post(f"{profile['firefly_base_url']}/api/v1/accounts",
-                       headers=_headers(profile), json=payload, timeout=10)
-    r.raise_for_status()
-    return r.json()["data"]
+    return _request("POST", "/api/v1/accounts", profile, json=payload, timeout=10)["data"]
 
 
 def get_categories(profile):
-    r = requests.get(f"{profile['firefly_base_url']}/api/v1/categories",
-                      headers=_headers(profile), params={"limit": 200}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("data", [])
+    return _request("GET", "/api/v1/categories", profile, params={"limit": 200}, timeout=10).get("data", [])
 
 
 def post_transaction(profile, payload):
-    r = requests.post(f"{profile['firefly_base_url']}/api/v1/transactions",
-                       headers=_headers(profile), json=payload, timeout=15)
-    r.raise_for_status()
-    return r.json()["data"]
+    return _request("POST", "/api/v1/transactions", profile, json=payload, timeout=15)["data"]
 
 
 def get_recent_transactions(profile, limit=5):
-    r = requests.get(f"{profile['firefly_base_url']}/api/v1/transactions",
-                      headers=_headers(profile), params={"limit": limit, "type": "default"}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("data", [])
+    return _request("GET", "/api/v1/transactions", profile,
+                     params={"limit": limit, "type": "default"}, timeout=10).get("data", [])
 
 
 def delete_transaction(profile, transaction_id):
-    r = requests.delete(f"{profile['firefly_base_url']}/api/v1/transactions/{transaction_id}",
-                         headers=_headers(profile), timeout=10)
-    r.raise_for_status()
+    _request("DELETE", f"/api/v1/transactions/{transaction_id}", profile, timeout=10)
 
 
 def update_transaction(profile, transaction_id, payload):
-    r = requests.put(f"{profile['firefly_base_url']}/api/v1/transactions/{transaction_id}",
-                      headers=_headers(profile), json=payload, timeout=15)
-    r.raise_for_status()
-    return r.json()["data"]
+    return _request("PUT", f"/api/v1/transactions/{transaction_id}", profile, json=payload, timeout=15)["data"]
 
 
 def get_monthly_summary(profile):
     today = datetime.date.today()
     start = today.replace(day=1).isoformat()
-    r = requests.get(f"{profile['firefly_base_url']}/api/v1/insight/expense/category",
-                      headers=_headers(profile),
-                      params={"start": start, "end": today.isoformat()}, timeout=10)
-    r.raise_for_status()
-    return r.json()
+    return _request("GET", "/api/v1/insight/expense/category", profile,
+                     params={"start": start, "end": today.isoformat()}, timeout=10)
 
 
 def get_budgets(profile):
-    r = requests.get(f"{profile['firefly_base_url']}/api/v1/budgets",
-                      headers=_headers(profile), params={"limit": 50}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("data", [])
+    return _request("GET", "/api/v1/budgets", profile, params={"limit": 50}, timeout=10).get("data", [])
 
 
 def search_transactions(profile, query, limit=5):
-    r = requests.get(f"{profile['firefly_base_url']}/api/v1/search/transactions",
-                      headers=_headers(profile), params={"query": query, "limit": limit}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("data", [])
+    return _request("GET", "/api/v1/search/transactions", profile,
+                     params={"query": query, "limit": limit}, timeout=10).get("data", [])
 
 
 def service_up(url):

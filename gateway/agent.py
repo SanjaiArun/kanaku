@@ -21,7 +21,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
-from tools import ALL_TOOLS, SENSITIVE_TOOLS
+from tools import ALL_TOOLS, CONFIRM_TEMPLATES, SENSITIVE_TOOLS
 
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 
@@ -109,35 +109,9 @@ class AgentState(TypedDict):
 
 def _describe_action(tool_call: dict) -> str:
     name, args = tool_call["name"], tool_call["args"]
-
-    if name == "create_transaction":
-        parts = [f"{str(args.get('type', '?')).capitalize()} of ₹{args.get('amount', '?')}"]
-        if args.get("source"):
-            parts.append(f"from {args['source']}")
-        if args.get("destination"):
-            parts.append(f"to {args['destination']}")
-        if args.get("category"):
-            parts.append(f"category: {args['category']}")
-        if args.get("description"):
-            parts.append(f"note: {args['description']}")
-        date = args.get("date") or "today"
-        return (f"Log this transaction?\n{', '.join(parts)} ({date})\n\n"
-                "Reply 'yes' to confirm, or tell me what to change.")
-
-    if name == "create_account":
-        role = f" ({args['account_role']})" if args.get("account_role") else ""
-        return (f"Create a new account '{args.get('name')}' as {args.get('firefly_type')}{role}?\n\n"
-                "Reply 'yes' to confirm, or tell me what to change.")
-
-    if name == "update_transaction":
-        return (f"Update transaction #{args.get('transaction_id')}: "
-                f"set {args.get('field')} = '{args.get('value')}'?\n\n"
-                "Reply 'yes' to confirm, or tell me what to change.")
-
-    if name == "delete_transaction":
-        return (f"Delete transaction #{args.get('transaction_id')}? This cannot be undone.\n\n"
-                "Reply 'yes' to confirm.")
-
+    template = CONFIRM_TEMPLATES.get(name)
+    if template:
+        return template(args)
     return f"Confirm this action: {name}({args})?\n\nReply 'yes' to confirm, or tell me what to change."
 
 

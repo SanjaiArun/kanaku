@@ -21,6 +21,49 @@ ASSET_TYPES = ["asset"]
 ANY_ACCOUNT_TYPES = ["asset", "expense", "revenue", "liability"]
 
 
+def _describe_create_transaction(args: dict) -> str:
+    parts = [f"{str(args.get('type', '?')).capitalize()} of ₹{args.get('amount', '?')}"]
+    if args.get("source"):
+        parts.append(f"from {args['source']}")
+    if args.get("destination"):
+        parts.append(f"to {args['destination']}")
+    if args.get("category"):
+        parts.append(f"category: {args['category']}")
+    if args.get("description"):
+        parts.append(f"note: {args['description']}")
+    date = args.get("date") or "today"
+    return (f"Log this transaction?\n{', '.join(parts)} ({date})\n\n"
+            "Reply 'yes' to confirm, or tell me what to change.")
+
+
+def _describe_create_account(args: dict) -> str:
+    role = f" ({args['account_role']})" if args.get("account_role") else ""
+    return (f"Create a new account '{args.get('name')}' as {args.get('firefly_type')}{role}?\n\n"
+            "Reply 'yes' to confirm, or tell me what to change.")
+
+
+def _describe_update_transaction(args: dict) -> str:
+    return (f"Update transaction #{args.get('transaction_id')}: "
+            f"set {args.get('field')} = '{args.get('value')}'?\n\n"
+            "Reply 'yes' to confirm, or tell me what to change.")
+
+
+def _describe_delete_transaction(args: dict) -> str:
+    return (f"Delete transaction #{args.get('transaction_id')}? This cannot be undone.\n\n"
+            "Reply 'yes' to confirm.")
+
+
+# One confirmation-text builder per entry in SENSITIVE_TOOLS, keyed by tool
+# name — agent.py's human_review step looks the template up here instead of
+# hardcoding an if/elif chain in a different file from the tools themselves.
+CONFIRM_TEMPLATES = {
+    "create_transaction": _describe_create_transaction,
+    "create_account": _describe_create_account,
+    "update_transaction": _describe_update_transaction,
+    "delete_transaction": _describe_delete_transaction,
+}
+
+
 def _profile(config: RunnableConfig) -> dict:
     return config["configurable"]["profile"]
 
@@ -294,3 +337,12 @@ ALL_TOOLS = [
     switch_profile,
     create_profile,
 ]
+
+# Fail fast at import if SENSITIVE_TOOLS or CONFIRM_TEMPLATES drift from the
+# actual registered tool names (typo/rename) — SENSITIVE_TOOLS gates the
+# human-confirmation step in agent.py, so a silent mismatch would be a
+# safety hole, not just a bug.
+assert SENSITIVE_TOOLS <= {t.name for t in ALL_TOOLS}, \
+    f"SENSITIVE_TOOLS contains unknown tool name(s): {SENSITIVE_TOOLS - {t.name for t in ALL_TOOLS}}"
+assert SENSITIVE_TOOLS == set(CONFIRM_TEMPLATES), \
+    f"CONFIRM_TEMPLATES out of sync with SENSITIVE_TOOLS: {SENSITIVE_TOOLS ^ set(CONFIRM_TEMPLATES)}"

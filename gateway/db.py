@@ -24,23 +24,38 @@ def db_conn():
     return psycopg.connect(conn_string())
 
 
+def _fetchone(query, params=(), row_factory=None):
+    with db_conn() as conn, conn.cursor(row_factory=row_factory) as cur:
+        cur.execute(query, params)
+        return cur.fetchone()
+
+
+def _fetchall(query, params=(), row_factory=None):
+    with db_conn() as conn, conn.cursor(row_factory=row_factory) as cur:
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+def _execute(query, params=(), commit=True):
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute(query, params)
+        if commit:
+            conn.commit()
+
+
 def get_active_profile(telegram_user_id):
-    with db_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT * FROM user_profiles WHERE telegram_user_id=%s AND is_active=TRUE",
-            (telegram_user_id,),
-        )
-        row = cur.fetchone()
+    row = _fetchone(
+        "SELECT * FROM user_profiles WHERE telegram_user_id=%s AND is_active=TRUE",
+        (telegram_user_id,), row_factory=dict_row,
+    )
     return dict(row) if row else None
 
 
 def get_all_profiles(telegram_user_id):
-    with db_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT * FROM user_profiles WHERE telegram_user_id=%s ORDER BY profile_name",
-            (telegram_user_id,),
-        )
-        rows = cur.fetchall()
+    rows = _fetchall(
+        "SELECT * FROM user_profiles WHERE telegram_user_id=%s ORDER BY profile_name",
+        (telegram_user_id,), row_factory=dict_row,
+    )
     return [dict(r) for r in rows]
 
 
@@ -81,18 +96,15 @@ def switch_profile(telegram_user_id, profile_name) -> bool:
 
 
 def count_profiles(telegram_user_id) -> int:
-    with db_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM user_profiles WHERE telegram_user_id=%s", (telegram_user_id,))
-        return cur.fetchone()[0]
+    return _fetchone("SELECT count(*) FROM user_profiles WHERE telegram_user_id=%s", (telegram_user_id,))[0]
 
 
 def profile_exists(telegram_user_id, profile_name) -> bool:
-    with db_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM user_profiles WHERE telegram_user_id=%s AND profile_name=%s",
-            (telegram_user_id, profile_name),
-        )
-        return cur.fetchone() is not None
+    row = _fetchone(
+        "SELECT 1 FROM user_profiles WHERE telegram_user_id=%s AND profile_name=%s",
+        (telegram_user_id, profile_name),
+    )
+    return row is not None
 
 
 def create_profile_row(telegram_user_id, profile_name, firefly_pat, firefly_base_url) -> None:
@@ -124,13 +136,9 @@ def create_profile_row(telegram_user_id, profile_name, firefly_pat, firefly_base
 
 
 def get_tg_offset() -> int:
-    with db_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT last_update_id FROM telegram_offset WHERE id=1")
-        row = cur.fetchone()
+    row = _fetchone("SELECT last_update_id FROM telegram_offset WHERE id=1")
     return row[0] if row else 0
 
 
 def set_tg_offset(offset: int) -> None:
-    with db_conn() as conn, conn.cursor() as cur:
-        cur.execute("UPDATE telegram_offset SET last_update_id=%s WHERE id=1", (offset,))
-        conn.commit()
+    _execute("UPDATE telegram_offset SET last_update_id=%s WHERE id=1", (offset,))
